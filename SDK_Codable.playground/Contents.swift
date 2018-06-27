@@ -291,9 +291,48 @@ private func getNewAccessToken(){
         AuthTokenManager.dispatchGroup.leave()
      }
  }
-
-
 }// extension ends
+
+
+class Disk {
+    static func store<T:Codable>(Object:T,withFileName:String)->Bool {
+        
+        let filePath = getDocumentsDirectory().appendingPathComponent(withFileName)
+        do
+        {
+            let fileData = try JSONEncoder().encode(Object)
+            try fileData.write(to: filePath)
+            return true
+        } catch let error {
+            print(error)
+            return false
+        }
+    }
+    
+    static func getObjectFrom<T:Codable>(FileName:String,withType:T)->T? {
+        
+       let filePath = getDocumentsDirectory().appendingPathComponent(FileName)
+       do
+       {
+       let fileData = try Data(contentsOf: filePath)
+       let object = try JSONDecoder().decode(T.self, from: fileData)
+       return object
+       } catch let error {
+       print(error)
+       return nil
+       }
+    }
+    
+    private static func getDocumentsDirectory() -> URL {
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        return paths[0]
+    }
+    
+}
+
+
+
+
 struct ZCRMRecord:Decodable {
     var id : String?
     var fieldNameVsValue:[String:Any?] = [String:Any?]() //left out
@@ -433,6 +472,7 @@ try req.setHttpRequest(Type: .GET)
         //print(String(data: data, encoding: .utf8))
    do{
     
+
     
     dataStruct = try JSONDecoder().decode(Root.self, from: data)
     guard let jsonObj = try? JSONSerialization.jsonObject(with: data, options: []) else {return}
