@@ -16,6 +16,7 @@ class NetworkRequest {
     private var baseURL:URL = URL(string: "https://www.zohoapis.com/crm/v2")!
     private var addZohoOauthHeader:Bool = false
     private var HTTPRequestHeaders = [String:String]()
+    private var authTokenManager:AuthTokenManager?
 
     public enum HttpRequestType:String {
         case GET,POST,PUT,DELETE,NONE
@@ -30,6 +31,13 @@ class NetworkRequest {
         case EmptyHTTPBody
         case EmptyHTTPHeader
 
+    }
+    /// Empty Init for requests which dont require Authorization
+    init(){
+    }
+    /// Pass in an Instance of AuthTokenManager to authorize your requests
+    init(authTokenManager:AuthTokenManager) {
+        self.authTokenManager = authTokenManager
     }
 
 }
@@ -69,7 +77,7 @@ extension NetworkRequest {
     }
 
     func setZohoOauthTokenHeader() throws {
-        guard !AuthTokenManager.accessToken.isEmpty else { throw OauthErrors.AccessTokenMissing }
+        guard ((authTokenManager?.accessToken.isEmpty) == false) else { throw OauthErrors.AccessTokenMissing }
         addZohoOauthHeader = true
     }
 
@@ -102,13 +110,17 @@ extension NetworkRequest {
         request.httpMethod = httpRequestType
 
         if addZohoOauthHeader == true {
-            request.addValue("Zoho-oauthtoken " + AuthTokenManager.accessToken , forHTTPHeaderField: "Authorization")
+            if let authTokenManager = authTokenManager {
+            request.addValue("Zoho-oauthtoken " + authTokenManager.accessToken , forHTTPHeaderField: "Authorization")
+            }
         }
+        
         if HTTPRequestHeaders.isEmpty == false {
             for (header,value) in HTTPRequestHeaders {
                 request.addValue(value, forHTTPHeaderField: header)
             }
         }
+        
         URLSession.shared.dataTask(with: request) { (data, response, error) in
             handler(data, response, error)
             }.resume()
@@ -140,9 +152,9 @@ class AuthTokenManager {
     private var authCode = String()
     private var accessTokenURL:String = "https://accounts.zoho.com/oauth/v2/token"
     private var networkRequest = NetworkRequest()
-    public static var accessToken = String()
-    public var tokens = Tokens()
-    public static var dispatchGroup = DispatchGroup()
+    public  var accessToken = String()
+    public  var tokens = Tokens()
+    public  static var dispatchGroup = DispatchGroup()
 
 
     private enum TimerState {
@@ -235,18 +247,18 @@ extension AuthTokenManager {
                 return
                 }
             self.tokens = decodedTokens
-            AuthTokenManager.accessToken = self.tokens.accessToken!
+            self.accessToken = self.tokens.accessToken!
             } catch let error {
                 print(error)
             }
-            AuthTokenManager.dispatchGroup.leave()
+        
             self.updateAccessTokenPeriodically()
         }
     }
 
 
     private func updateAccessTokenPeriodically(){
-        print("Current Token",AuthTokenManager.accessToken)
+        print("Current Token",self.accessToken)
         timer.schedule(deadline: .now() , repeating: accessTokenUpdateInterval, leeway: .seconds(0))
         timer.setEventHandler {
         self.getNewAccessToken()
@@ -256,7 +268,6 @@ extension AuthTokenManager {
 
 
 private func getNewAccessToken(){
-    AuthTokenManager.dispatchGroup.enter()
     let tokenRequestBody = ["grant_type":"refresh_token","client_id":self.clientID,"client_secret":self.clientSecret,"refresh_token":self.tokens.refreshToken!]
     do {
         try self.networkRequest.setBaseURL(url: self.accessTokenURL)
@@ -272,8 +283,8 @@ private func getNewAccessToken(){
         do{
             let decodedAccessToken = try JSONDecoder().decode(Tokens.self, from: data)
             self.tokens.accessToken = decodedAccessToken.accessToken
-            AuthTokenManager.accessToken = self.tokens.accessToken!
-            print("New Access Token",AuthTokenManager.accessToken)
+            self.accessToken = self.tokens.accessToken!
+            print("New Access Token",self.accessToken)
          } catch let error {
             print(error)
          }
@@ -402,14 +413,14 @@ struct Root:Decodable {
 
 
 
-let authTokenManager = AuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.db6ba92e9050138363252dc99f97fcb2.552862851dad9df7315c1e0a636ba0c2", accessTokenExpiry: 3600)
+let authTokenManager = AuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.444326e50060f07ff81ec5c81886fbb5.a1a54ca87bf3dd95ef28b6fba9d17799", accessTokenExpiry: 3600)
 
 
 var dataStruct = Root()
 
 AuthTokenManager.dispatchGroup.notify(queue: .main) {
 
-let req = NetworkRequest()
+let req = NetworkRequest(authTokenManager: authTokenManager)
 do {
 try req.setBaseURL(url: "https://www.zohoapis.com/crm/v2")
 try req.setHttpRequest(Type: .GET)
