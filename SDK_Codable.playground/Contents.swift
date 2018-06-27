@@ -10,27 +10,27 @@ public enum OauthErrors:Error{
 
 
 class NetworkRequest {
-
+    
     private var httpBody = Data()
     private var httpRequestType = String()
     private var baseURL:URL = URL(string: "https://www.zohoapis.com/crm/v2")!
     private var addZohoOauthHeader:Bool = false
     private var HTTPRequestHeaders = [String:String]()
     private var authTokenManager:AuthTokenManager?
-
+    
     public enum HttpRequestType:String {
         case GET,POST,PUT,DELETE,NONE
     }
-
+    
     private enum NetworkRequestErrors:Error{
         case InvalidHttpRequestType(String)
     }
-
+    
     private enum NetworkingErrors:Error{
         case InvalidURL
         case EmptyHTTPBody
         case EmptyHTTPHeader
-
+        
     }
     /// Empty Init for requests which dont require Authorization
     init(){
@@ -39,29 +39,29 @@ class NetworkRequest {
     init(authTokenManager:AuthTokenManager) {
         self.authTokenManager = authTokenManager
     }
-
+    
 }
 
 extension NetworkRequest {
-
+    
     func setBaseURL(url:String) throws {
         guard let url = URL(string: url) else {throw NetworkingErrors.InvalidURL}
         self.baseURL = url
     }
-
+    
     func appendURLPath(Component:String) {
         self.baseURL.appendPathComponent(Component)
     }
-
+    
     func setDataForRequest(data:Data)throws{
         guard !data.isEmpty else {throw NetworkingErrors.EmptyHTTPBody}
         self.httpBody = data
     }
-
+    
     func setHttpRequest(Type:HttpRequestType) throws {
-
+        
         typealias reqType  = HttpRequestType
-
+        
         switch Type {
         case .POST:
             self.httpRequestType = reqType.POST.rawValue
@@ -75,14 +75,14 @@ extension NetworkRequest {
             throw NetworkRequestErrors.InvalidHttpRequestType("NONE is used only as an initial value !")
         }
     }
-
+    
     func setZohoOauthTokenHeader() throws {
         guard ((authTokenManager?.accessToken.isEmpty) == false) else { throw OauthErrors.AccessTokenMissing }
         addZohoOauthHeader = true
     }
-
+    
     func addURLRequestParameters(params:[String:String]) {
-
+        
         var baseURLString = self.baseURL.absoluteString
         baseURLString.append("?")
         for (key,value) in params {
@@ -92,26 +92,26 @@ extension NetworkRequest {
         do{try setBaseURL(url: baseURLString)}
         catch let error{print(error)}
     }
-
-
+    
+    
     func addHTTPRequestHeaders(headers:[String:String]) throws {
-
+        
         for (header,value) in headers {
-
+            
             guard !header.isEmpty && !value.isEmpty else {throw NetworkingErrors.EmptyHTTPHeader}
         }
         self.HTTPRequestHeaders = headers
     }
-
-
+    
+    
     func makeNetworkRequest(handler: @escaping (_ Data:Data?,_ Response:URLResponse?,_ Error:Error?)->() ){
-
+        
         var request = URLRequest(url: self.baseURL)
         request.httpMethod = httpRequestType
-
+        
         if addZohoOauthHeader == true {
             if let authTokenManager = authTokenManager {
-            request.addValue("Zoho-oauthtoken " + authTokenManager.accessToken , forHTTPHeaderField: "Authorization")
+                request.addValue("Zoho-oauthtoken " + authTokenManager.accessToken , forHTTPHeaderField: "Authorization")
             }
         }
         
@@ -124,24 +124,24 @@ extension NetworkRequest {
         URLSession.shared.dataTask(with: request) { (data, response, error) in
             handler(data, response, error)
             }.resume()
-
-       }
-
+        
+    }
+    
 } // extension ends
 
 
 extension NetworkRequest { // getters
-
+    
     func getBaseURL()-> URL{
         return baseURL
     }
-
+    
 }
 
 
 
 class AuthTokenManager {
-
+    
     private let timer = DispatchSource.makeTimerSource()
     private var timerState:TimerState = .Suspended
     private var accessTokenUpdateInterval = DispatchTimeInterval.seconds(3600)
@@ -155,17 +155,17 @@ class AuthTokenManager {
     public  var accessToken = String()
     public  var tokens = Tokens()
     public  static var dispatchGroup = DispatchGroup()
-
-
+    
+    
     private enum TimerState {
         case Suspended
         case Resumed
     }
-
+    
     init(){
-
+        
     }
-
+    
     init(clientID:String,clientSecret:String,redirectURI:String,authCode:String,accessTokenExpiry:UInt?) {
         guard validateOauth(Inputs: clientID,clientSecret,redirectURI,authCode) else {return}
         self.clientID = clientID
@@ -174,10 +174,10 @@ class AuthTokenManager {
         self.redirectURI = redirectURI
         if let accessTokenExpiry = accessTokenExpiry {
             if accessTokenExpiry > 300 { // min access token expiry = 5 mins
-           let accessTokenUpdateInterval =  Int(accessTokenExpiry) - 180 // updates 3 mins before token expiryTime
-           let leeway =  ( (accessTokenUpdateInterval * 30) / 5 )
-           self.timerLeeway = DispatchTimeInterval.nanoseconds(leeway) // timer sleep period
-           self.accessTokenUpdateInterval = DispatchTimeInterval.seconds(accessTokenUpdateInterval)
+                let accessTokenUpdateInterval =  Int(accessTokenExpiry) - 180 // updates 3 mins before token expiryTime
+                let leeway =  ( (accessTokenUpdateInterval * 30) / 5 )
+                self.timerLeeway = DispatchTimeInterval.nanoseconds(leeway) // timer sleep period
+                self.accessTokenUpdateInterval = DispatchTimeInterval.seconds(accessTokenUpdateInterval)
             }
         }
         getAccessAndRefreshTokens()
@@ -191,22 +191,22 @@ extension AuthTokenManager {
         var refreshToken:String?
         var expiresIn:Int?
         var tokenType:String?
-
-
-    public enum CodingKeys : String,CodingKey {
-        case accessToken = "access_token"
-        case refreshToken = "refresh_token"
-        case expiresIn = "expires_in"
-        case tokenType = "token_type"
-    }
+        
+        
+        public enum CodingKeys : String,CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case tokenType = "token_type"
+        }
     }
 }
 
 
 extension AuthTokenManager {
-
-
-    func switchTimerState(){
+    
+    
+    internal func switchTimerState(){
         if self.timerState == .Resumed {
             self.timer.suspend()
             self.timerState = .Suspended
@@ -215,83 +215,100 @@ extension AuthTokenManager {
             self.timerState = .Resumed
         }
     }
-
-
-    private func validateOauth(Inputs:String...)-> Bool{
+    
+    
+    internal func validateOauth(Inputs:String...)-> Bool{
         for ip in Inputs {
             if ip.isEmpty || ip.count < 5 {return false}
         }
         return true
     }
-
-
-    private func getAccessAndRefreshTokens(){
-       let tokenRequestBody = ["grant_type":"authorization_code","client_id":clientID,"client_secret":clientSecret,"redirect_uri":redirectURI,"code":authCode]
-
+    
+    
+    internal func getAccessAndRefreshTokens(){
+        let tokenRequestBody = ["grant_type":"authorization_code","client_id":clientID,"client_secret":clientSecret,"redirect_uri":redirectURI,"code":authCode]
+        
         do{
-        try networkRequest.setBaseURL(url: accessTokenURL)
+            try networkRequest.setBaseURL(url: accessTokenURL)
             networkRequest.addURLRequestParameters(params: tokenRequestBody)
-        try networkRequest.setHttpRequest(Type: .POST)
+            try networkRequest.setHttpRequest(Type: .POST)
         }   catch let error {
             print(error)
         }
-       AuthTokenManager.dispatchGroup.enter()
-       networkRequest.makeNetworkRequest { (data, response, error) in
-
+        AuthTokenManager.dispatchGroup.enter()
+        networkRequest.makeNetworkRequest { (data, response, error) in
+            
             guard error == nil else {return}
             guard let data = data else {return}
             do{
-            let decodedTokens = try JSONDecoder().decode(Tokens.self, from: data)
-            guard decodedTokens.accessToken != nil && decodedTokens.refreshToken != nil else{
-                print("Invalid Auth Code")
-                return
+                let decodedTokens = try JSONDecoder().decode(Tokens.self, from: data)
+                guard decodedTokens.accessToken != nil && decodedTokens.refreshToken != nil else{
+                    print("Invalid Auth Code")
+                    return
                 }
-            self.tokens = decodedTokens
-            self.accessToken = self.tokens.accessToken!
+                self.tokens = decodedTokens
+                self.accessToken = self.tokens.accessToken!
             } catch let error {
                 print(error)
             }
-        
+            
             self.updateAccessTokenPeriodically()
         }
     }
-
-
+    
+    
     private func updateAccessTokenPeriodically(){
         print("Current Token",self.accessToken)
         timer.schedule(deadline: .now() , repeating: accessTokenUpdateInterval, leeway: .seconds(0))
         timer.setEventHandler {
-        self.getNewAccessToken()
+            self.getNewAccessToken()
         } //timer
         switchTimerState()
     }
-
-
-private func getNewAccessToken(){
-    let tokenRequestBody = ["grant_type":"refresh_token","client_id":self.clientID,"client_secret":self.clientSecret,"refresh_token":self.tokens.refreshToken!]
-    do {
-        try self.networkRequest.setBaseURL(url: self.accessTokenURL)
-        self.networkRequest.addURLRequestParameters(params: tokenRequestBody)
-        try self.networkRequest.setHttpRequest(Type: .POST)
-       } catch let error {
-        print(error)
-    }
-
-    self.networkRequest.makeNetworkRequest{ (data, response, error) in
-        guard error == nil else {return}
-        guard let data = data else {return}
-        do{
-            let decodedAccessToken = try JSONDecoder().decode(Tokens.self, from: data)
-            self.tokens.accessToken = decodedAccessToken.accessToken
-            self.accessToken = self.tokens.accessToken!
-            print("New Access Token",self.accessToken)
-         } catch let error {
+    
+    
+    internal func getNewAccessToken(){
+        let tokenRequestBody = ["grant_type":"refresh_token","client_id":self.clientID,"client_secret":self.clientSecret,"refresh_token":self.tokens.refreshToken!]
+        do {
+            try self.networkRequest.setBaseURL(url: self.accessTokenURL)
+            self.networkRequest.addURLRequestParameters(params: tokenRequestBody)
+            try self.networkRequest.setHttpRequest(Type: .POST)
+        } catch let error {
             print(error)
-         }
-        AuthTokenManager.dispatchGroup.leave()
-     }
- }
+        }
+        
+        self.networkRequest.makeNetworkRequest{ (data, response, error) in
+            guard error == nil else {return}
+            guard let data = data else {return}
+            do{
+                let decodedAccessToken = try JSONDecoder().decode(Tokens.self, from: data)
+                self.tokens.accessToken = decodedAccessToken.accessToken
+                self.accessToken = self.tokens.accessToken!
+                print("New Access Token",self.accessToken)
+            } catch let error {
+                print(error)
+            }
+            AuthTokenManager.dispatchGroup.leave()
+        }
+    }
 }// extension ends
+
+
+class SuperAuthTokenManager:AuthTokenManager {
+    
+    
+    init(clientID: String, clientSecret: String, redirectURI: String, authCode: String) {
+    super.init(clientID: clientID, clientSecret: clientSecret, redirectURI: redirectURI, authCode: authCode,accessTokenExpiry: nil)
+    }
+    
+    override func getNewAccessToken() {
+        
+    }
+    
+    
+    
+}
+
 
 
 class Disk {
@@ -311,17 +328,24 @@ class Disk {
     
     static func getObjectFrom<T:Codable>(FileName:String,withType:T)->T? {
         
-       let filePath = getDocumentsDirectory().appendingPathComponent(FileName)
-       do
-       {
-       let fileData = try Data(contentsOf: filePath)
-       let object = try JSONDecoder().decode(T.self, from: fileData)
-       return object
-       } catch let error {
-       print(error)
-       return nil
-       }
+        let filePath = getDocumentsDirectory().appendingPathComponent(FileName)
+        do
+        {
+            let fileData = try Data(contentsOf: filePath)
+            let object = try JSONDecoder().decode(T.self, from: fileData)
+            return object
+        } catch let error {
+            print(error)
+            return nil
+        }
     }
+    
+    
+    static func checkIfFileExists(For fileName:String)->Bool{
+        let filePath = getDocumentsDirectory().appendingPathComponent(fileName)
+        return FileManager.default.fileExists(atPath: filePath.path)
+    }
+    
     
     private static func getDocumentsDirectory() -> URL {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
@@ -345,7 +369,7 @@ struct ZCRMRecord:Decodable {
     var createdTime : String?
     var modifiedTime : String?
     public static let standardFields = ["id","Product_Details","$line_tax","Owner","Created_By","Modified_By","Created_Time","Modified_Time"]
-
+    
     enum CodingKeys:String,CodingKey{
         case id = "id"
         case lineItems = "Product_Details"
@@ -356,7 +380,7 @@ struct ZCRMRecord:Decodable {
         case createdTime = "Created_Time"
         case modifiedTime = "Modified_Time"
     }
-
+    
 }
 
 //extension ZCRMRecord : Decodable {
@@ -400,7 +424,7 @@ struct ZCRMInventoryLineItem : Codable
     private var lineTaxes : [ZCRMTax]?
     private var netTotal : Double = 0.0
     private var deleteFlag : Bool = false
-
+    
     enum CodingKeys:String,CodingKey {
         case id
         case product
@@ -417,11 +441,11 @@ struct ZCRMInventoryLineItem : Codable
 }
 
 struct Product : Codable {
-
+    
     private var productName:String?
     private var productCode:String?
     private var productId:String?
-
+    
     enum CodingKeys:String,CodingKey {
         case productCode =  "Product_Code"
         case productName = "name"
@@ -434,7 +458,7 @@ struct ZCRMTax: Codable
     private var taxName : String?
     private var percentage : Double?
     private var value : Double?
-
+    
     enum CodingKeys:String,CodingKey{
         case percentage
         case taxName = "name"
@@ -458,58 +482,58 @@ let authTokenManager = AuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHG
 var dataStruct = Root()
 
 AuthTokenManager.dispatchGroup.notify(queue: .main) {
-
-let req = NetworkRequest(authTokenManager: authTokenManager)
-do {
-try req.setBaseURL(url: "https://www.zohoapis.com/crm/v2")
-try req.setHttpRequest(Type: .GET)
-    req.appendURLPath(Component: "Purchase_Orders")
-    try req.setZohoOauthTokenHeader()
-    req.makeNetworkRequest { (data, response, error) in
-        guard error == nil else {return}
-        guard let data = data else {return}
-        
-        //print(String(data: data, encoding: .utf8))
-   do{
     
-
-    
-    dataStruct = try JSONDecoder().decode(Root.self, from: data)
-    guard let jsonObj = try? JSONSerialization.jsonObject(with: data, options: []) else {return}
-    guard let dict = jsonObj  as? [String:Any] else {return}
-    guard let jsonDict = dict["data"] as? [[String:Any]] else {return}
-
-        for i in (0..<jsonDict.count){
-
-            for (key,value) in jsonDict[i] {
-             
-                if key.hasPrefix("$"){
-                    dataStruct.data[i].properties[key] = value
+    let req = NetworkRequest(authTokenManager: authTokenManager)
+    do {
+        try req.setBaseURL(url: "https://www.zohoapis.com/crm/v2")
+        try req.setHttpRequest(Type: .GET)
+        req.appendURLPath(Component: "Purchase_Orders")
+        try req.setZohoOauthTokenHeader()
+        req.makeNetworkRequest { (data, response, error) in
+            guard error == nil else {return}
+            guard let data = data else {return}
+            
+            //print(String(data: data, encoding: .utf8))
+            do{
+                
+                
+                
+                dataStruct = try JSONDecoder().decode(Root.self, from: data)
+                guard let jsonObj = try? JSONSerialization.jsonObject(with: data, options: []) else {return}
+                guard let dict = jsonObj  as? [String:Any] else {return}
+                guard let jsonDict = dict["data"] as? [[String:Any]] else {return}
+                
+                for i in (0..<jsonDict.count){
+                    
+                    for (key,value) in jsonDict[i] {
+                        
+                        if key.hasPrefix("$"){
+                            dataStruct.data[i].properties[key] = value
+                        }
+                        
+                        if ZCRMRecord.standardFields.contains(key) == false && key.hasPrefix("$") == false {
+                            dataStruct.data[i].fieldNameVsValue[key] = value
+                        }
+                        
+                    }
                 }
                 
-                if ZCRMRecord.standardFields.contains(key) == false && key.hasPrefix("$") == false {
-                    dataStruct.data[i].fieldNameVsValue[key] = value
+                for record in dataStruct.data{
+                    
+                    print("\(record.lineItems![0]) \n ******************** END OF RECORD ********************\n")
                 }
                 
-            }
-        }
-    
-    for record in dataStruct.data{
+            } catch let error {
+                print(error)
+            } //try ends
+            
+        } // network req
         
-        print("\(record.lineItems![0]) \n ******************** END OF RECORD ********************\n")
+        
+    } catch let error {
+        print("ERROR \(error)")
     }
     
-    } catch let error {
-      print(error)
-      } //try ends
-    
-   } // network req
-    
-    
-} catch let error {
-    print("ERROR \(error)")
-}
-
 } // Dispatch ends
 
 
