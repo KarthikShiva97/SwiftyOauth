@@ -372,12 +372,14 @@ class SuperAuthTokenManager:AuthTokenManager {
     
     override func beginOauthFlow(){
         
-        if checkIfTokensExistFor(clientID: clientID) == true
+        let defaultTokenFileName = "Tokens" // using this instead of client ID
+        
+        if checkIfTokensExistFor(clientID: defaultTokenFileName) == true
         {
             print("Fetching Tokens from Local Storage ...")
             do
             {
-                let diskTokens = try getAccessTokenFromDiskFor(fileName: clientID)
+                let diskTokens = try getAccessTokenFromDiskFor(fileName: defaultTokenFileName)
                 
                 if checkIfAccessTokenIsValid(disktokens: diskTokens) == true {
                     print("Still valid loadded")
@@ -593,7 +595,7 @@ struct Root:Decodable {
 
 
 
-let authTokenManager = SuperAuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.17501ac2a7a06194d5930bf1a90b7db0.07336439103c75ffe0d85357cc88a3a9")
+let authTokenManager = SuperAuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.4c92a1d2397a1eeb6d76efd781557962.e99c01e3521b6115b618b379567df20a")
 
 authTokenManager.beginOauthFlow()
 
@@ -601,7 +603,6 @@ authTokenManager.beginOauthFlow()
 var dataStruct = Root()
 
 AuthTokenManager.dispatchGroup.notify(queue: .main) {
-    print("Entered notified state")
     let req = NetworkRequest(authTokenManager: authTokenManager)
     print()
     do {
