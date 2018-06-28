@@ -122,10 +122,29 @@ extension NetworkRequest {
         }
         
         URLSession.shared.dataTask(with: request) { (data, response, error) in
+            self.handleAPIResponse(response: response as? HTTPURLResponse)
             handler(data, response, error)
             }.resume()
         
     }
+    
+    func handleAPIResponse(response:HTTPURLResponse?){
+        
+        guard let response = response else {print("Invalid Response");return}
+        
+        switch response.statusCode
+        {
+        case 401:
+            print("Access Token Expired !")
+            authTokenManager?.getNewAccessToken(.storeToFile)
+            print("Tokens Updated ! Retry Now..")
+            
+            
+        default:
+            print("Response is OK! \n ")
+        }
+    }
+    
     
 } // extension ends
 
@@ -146,7 +165,7 @@ class AuthTokenManager {
     private var timerState:TimerState = .Suspended
     private var accessTokenUpdateInterval = DispatchTimeInterval.seconds(3600)
     private var timerLeeway = DispatchTimeInterval.nanoseconds(30) // Timer Sleep Period
-    private var clientID = String()
+    public  var clientID = String()
     private var clientSecret = String()
     private var redirectURI = String()
     private var authCode = String()
@@ -160,6 +179,15 @@ class AuthTokenManager {
     private enum TimerState {
         case Suspended
         case Resumed
+    }
+    
+    enum TokenStorageOptions {
+        case storeToFile
+        case none
+    }
+    
+    internal enum TokenManagerErrors:Error{
+        case TokenFileCorrupted
     }
     
     init(){
@@ -180,9 +208,10 @@ class AuthTokenManager {
                 self.accessTokenUpdateInterval = DispatchTimeInterval.seconds(accessTokenUpdateInterval)
             }
         }
-        getAccessAndRefreshTokens()
+
     }
-}
+    
+} // class ends
 
 
 extension AuthTokenManager {
@@ -191,6 +220,7 @@ extension AuthTokenManager {
         var refreshToken:String?
         var expiresIn:Int?
         var tokenType:String?
+        var expiryDate:Date?
         
         
         public enum CodingKeys : String,CodingKey {
@@ -198,6 +228,7 @@ extension AuthTokenManager {
             case refreshToken = "refresh_token"
             case expiresIn = "expires_in"
             case tokenType = "token_type"
+            case expiryDate = "expiryDate"
         }
     }
 }
@@ -205,6 +236,10 @@ extension AuthTokenManager {
 
 extension AuthTokenManager {
     
+    
+    @objc internal func beginOauthFlow(){
+    prepareRequestToFetchTokens(options: .none)
+    }
     
     internal func switchTimerState(){
         if self.timerState == .Resumed {
@@ -225,16 +260,24 @@ extension AuthTokenManager {
     }
     
     
-    internal func getAccessAndRefreshTokens(){
+    
+    internal func prepareRequestToFetchTokens(options:TokenStorageOptions){
         let tokenRequestBody = ["grant_type":"authorization_code","client_id":clientID,"client_secret":clientSecret,"redirect_uri":redirectURI,"code":authCode]
         
         do{
             try networkRequest.setBaseURL(url: accessTokenURL)
             networkRequest.addURLRequestParameters(params: tokenRequestBody)
             try networkRequest.setHttpRequest(Type: .POST)
+            getAccessAndRefreshTokens(options: options)
         }   catch let error {
             print(error)
         }
+    }
+    
+    
+    
+    
+    internal func getAccessAndRefreshTokens(options:TokenStorageOptions){
         AuthTokenManager.dispatchGroup.enter()
         networkRequest.makeNetworkRequest { (data, response, error) in
             
@@ -242,18 +285,38 @@ extension AuthTokenManager {
             guard let data = data else {return}
             do{
                 let decodedTokens = try JSONDecoder().decode(Tokens.self, from: data)
+                print("DECODED TOKENS",decodedTokens)
                 guard decodedTokens.accessToken != nil && decodedTokens.refreshToken != nil else{
                     print("Invalid Auth Code")
                     return
                 }
                 self.tokens = decodedTokens
+                self.tokens.expiryDate = self.getAccessTokenExpiryDate()
                 self.accessToken = self.tokens.accessToken!
+                self.shouldStoreTokens(option: options)
             } catch let error {
                 print(error)
             }
-            
+        
+        }
+    }
+    
+    
+    private func shouldStoreTokens(option:TokenStorageOptions){
+        
+        if option == .storeToFile {
+            Disk.store(Object: self.tokens, withFileName: clientID)
+            AuthTokenManager.dispatchGroup.leave()
+        } else {
             self.updateAccessTokenPeriodically()
         }
+    }
+ 
+    
+    private func getAccessTokenExpiryDate() -> Date {
+        let date = Date()
+        let calender = Calendar.current
+        return calender.date(byAdding: .hour, value: 1, to: date)!
     }
     
     
@@ -261,13 +324,13 @@ extension AuthTokenManager {
         print("Current Token",self.accessToken)
         timer.schedule(deadline: .now() , repeating: accessTokenUpdateInterval, leeway: .seconds(0))
         timer.setEventHandler {
-            self.getNewAccessToken()
+            self.getNewAccessToken(.none)
         } //timer
         switchTimerState()
     }
     
     
-    internal func getNewAccessToken(){
+    internal func getNewAccessToken(_ option:TokenStorageOptions){
         let tokenRequestBody = ["grant_type":"refresh_token","client_id":self.clientID,"client_secret":self.clientSecret,"refresh_token":self.tokens.refreshToken!]
         do {
             try self.networkRequest.setBaseURL(url: self.accessTokenURL)
@@ -284,6 +347,7 @@ extension AuthTokenManager {
                 let decodedAccessToken = try JSONDecoder().decode(Tokens.self, from: data)
                 self.tokens.accessToken = decodedAccessToken.accessToken
                 self.accessToken = self.tokens.accessToken!
+                self.shouldStoreTokens(option: option)
                 print("New Access Token",self.accessToken)
             } catch let error {
                 print(error)
@@ -294,15 +358,73 @@ extension AuthTokenManager {
 }// extension ends
 
 
+
+
+
+
 class SuperAuthTokenManager:AuthTokenManager {
     
     
     init(clientID: String, clientSecret: String, redirectURI: String, authCode: String) {
-    super.init(clientID: clientID, clientSecret: clientSecret, redirectURI: redirectURI, authCode: authCode,accessTokenExpiry: nil)
+        super.init(clientID: clientID, clientSecret: clientSecret, redirectURI: redirectURI, authCode: authCode,accessTokenExpiry: nil)
     }
     
-    override func getNewAccessToken() {
+    
+    override func beginOauthFlow(){
         
+        if checkIfTokensExistFor(clientID: clientID) == true
+        {
+            print("Fetching Tokens from Local Storage ...")
+            do
+            {
+                let diskTokens = try getAccessTokenFromDiskFor(fileName: clientID)
+                
+                if checkIfAccessTokenIsValid(disktokens: diskTokens) == true {
+                    print("Still valid loadded")
+                    self.tokens = diskTokens
+                    self.accessToken = self.tokens.accessToken! // Tokens from disk are still valid , so load them for usage
+                    print("Loaded Tokens \(self.tokens)")
+                } else {
+                    prepareRequestToFetchTokens(options: .storeToFile) // Fetches new tokens and stores
+                }
+                
+            } catch let error {
+                print(error)
+            }
+            
+        } else {
+            print("No tokens were found for the client ID \n Fetching new Tokens..")
+            prepareRequestToFetchTokens(options: .storeToFile)
+        }
+        
+    }
+    
+
+    func getAccessTokenFromDiskFor(fileName:String) throws -> Tokens{
+        guard let DiskTokens = Disk.getObjectFrom(FileName: fileName, withType: self.tokens) else {
+            throw TokenManagerErrors.TokenFileCorrupted
+        }
+        print("DISKTOKENS",DiskTokens)
+        return DiskTokens
+    }
+    
+
+    func checkIfTokensExistFor(clientID:String)->Bool{
+        return Disk.checkIfFileExists(For:clientID)
+    }
+    
+    
+    func checkIfAccessTokenIsValid(disktokens:Tokens)->Bool{
+        
+        let dateNow = Date()
+        let calender = Calendar.current
+        let dateInFiveMinutes = calender.date(byAdding: .minute, value: 5, to: dateNow)!
+        
+        if disktokens.expiryDate! >= dateInFiveMinutes { // checking if accessToken has got atleast 5 mins to expire
+            return true
+        } else {
+            return false
+        }
     }
     
     
@@ -313,7 +435,6 @@ class SuperAuthTokenManager:AuthTokenManager {
 
 class Disk {
     static func store<T:Codable>(Object:T,withFileName:String)->Bool {
-        
         let filePath = getDocumentsDirectory().appendingPathComponent(withFileName)
         do
         {
@@ -327,7 +448,6 @@ class Disk {
     }
     
     static func getObjectFrom<T:Codable>(FileName:String,withType:T)->T? {
-        
         let filePath = getDocumentsDirectory().appendingPathComponent(FileName)
         do
         {
@@ -340,18 +460,33 @@ class Disk {
         }
     }
     
-    
     static func checkIfFileExists(For fileName:String)->Bool{
         let filePath = getDocumentsDirectory().appendingPathComponent(fileName)
         return FileManager.default.fileExists(atPath: filePath.path)
     }
     
+    static func removeFile(Named:String)->Bool{
+        
+        if checkIfFileExists(For: Named) == true
+        {
+            let filePath = getDocumentsDirectory().appendingPathComponent(Named)
+            do
+            {
+                try FileManager.default.removeItem(at: filePath)
+                return true
+            }catch let error{
+                print(error)
+                return false
+            }
+        } else {
+            return false
+        }
+    }
     
     private static func getDocumentsDirectory() -> URL {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         return paths[0]
     }
-    
 }
 
 
@@ -383,24 +518,6 @@ struct ZCRMRecord:Decodable {
     
 }
 
-//extension ZCRMRecord : Decodable {
-//
-//    init(from decoder:Decoder) throws {
-//
-//        let container = try decoder.container(keyedBy: CodingKeys.self)
-//        let data = try container.nestedContainer(keyedBy: CodingKeys.self, forKey: .data)
-//        id = try data.decodeIfPresent(Int64.self, forKey: .id)
-//        lineItems = try data.decodeIfPresent([ZCRMInventoryLineItem].self, forKey: .lineItems)
-//        tax = try data.decodeIfPresent([ZCRMTax].self, forKey: .tax)
-//        owner = try data.decode(ZCRMUser.self, forKey: .owner)
-//        createdBy = try data.decode(ZCRMUser.self, forKey: .createdBy)
-//        modifiedBy = try data.decode(ZCRMUser.self, forKey: .modifiedBy)
-//        createdTime = try data.decodeIfPresent(String.self, forKey: .createdTime)
-//        modifiedTime = try data.decodeIfPresent(String.self, forKey: .modifiedTime)
-//
-//    }
-//
-//}
 
 
 struct ZCRMUser : Codable
@@ -476,24 +593,25 @@ struct Root:Decodable {
 
 
 
-let authTokenManager = AuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.444326e50060f07ff81ec5c81886fbb5.a1a54ca87bf3dd95ef28b6fba9d17799", accessTokenExpiry: 3600)
+let authTokenManager = SuperAuthTokenManager(clientID: "1000.S90TSTPVX9PR38403656RQHGE70Y2N", clientSecret: "7db3c01ec1801665831eaa43edd1f90bd983629ffa", redirectURI: "https://www.test.com", authCode: "1000.17501ac2a7a06194d5930bf1a90b7db0.07336439103c75ffe0d85357cc88a3a9")
+
+authTokenManager.beginOauthFlow()
 
 
 var dataStruct = Root()
 
 AuthTokenManager.dispatchGroup.notify(queue: .main) {
-    
+    print("Entered notified state")
     let req = NetworkRequest(authTokenManager: authTokenManager)
+    print()
     do {
         try req.setBaseURL(url: "https://www.zohoapis.com/crm/v2")
         try req.setHttpRequest(Type: .GET)
-        req.appendURLPath(Component: "Purchase_Orders")
+        req.appendURLPath(Component: "Leads")
         try req.setZohoOauthTokenHeader()
         req.makeNetworkRequest { (data, response, error) in
             guard error == nil else {return}
             guard let data = data else {return}
-            
-            //print(String(data: data, encoding: .utf8))
             do{
                 
                 
@@ -520,7 +638,7 @@ AuthTokenManager.dispatchGroup.notify(queue: .main) {
                 
                 for record in dataStruct.data{
                     
-                    print("\(record.lineItems![0]) \n ******************** END OF RECORD ********************\n")
+                    print("\(record.fieldNameVsValue) \n ******************** END OF RECORD ********************\n")
                 }
                 
             } catch let error {
@@ -537,86 +655,3 @@ AuthTokenManager.dispatchGroup.notify(queue: .main) {
 } // Dispatch ends
 
 
-
-
-
-
-
-//{
-//    "data": [
-//    {
-//    "Owner": {
-//    "name": "Karthik Shiva",
-//    "id": "2931549000000136011"
-//    },
-//    "Email": "gg@gmail.com",
-//    "$currency_symbol": "XCD",
-//    "Visitor_Score": null,
-//    "Other_Phone": null,
-//    "Mailing_State": null,
-//    "Other_State": null,
-//    "Other_Country": null,
-//    "Last_Activity_Time": "2018-06-11T14:56:29+05:30",
-//    "Department": null,
-//    "$process_flow": false,
-//    "Assistant": null,
-//    "Mailing_Country": null,
-//    "id": "2931549000000270017",
-//    "$approved": true,
-//    "$approval": {
-//    "delegate": false,
-//    "approve": false,
-//    "reject": false,
-//    "resubmit": false
-//    },
-//    "First_Visited_URL": null,
-//    "Days_Visited": null,
-//    "Other_City": null,
-//    "Created_Time": "2018-06-11T14:45:08+05:30",
-//    "$followed": false,
-//    "$editable": true,
-//    "Home_Phone": null,
-//    "Last_Visited_Time": null,
-//    "Created_By": {
-//    "name": "Karthik Shiva",
-//    "id": "2931549000000136011"
-//    },
-//    "Secondary_Email": null,
-//    "Description": null,
-//    "Vendor_Name": null,
-//    "Mailing_Zip": null,
-//    "Reports_To": null,
-//    "Number_Of_Chats": null,
-//    "Twitter": null,
-//    "Other_Zip": null,
-//    "Mailing_Street": null,
-//    "Average_Time_Spent_Minutes": null,
-//    "Salutation": null,
-//    "First_Name": null,
-//    "Full_Name": "Rajesh",
-//    "Asst_Phone": null,
-//    "Modified_By": {
-//    "name": "Karthik Shiva",
-//    "id": "2931549000000136011"
-//    },
-//    "Skype_ID": null,
-//    "Phone": null,
-//    "Account_Name": null,
-//    "Email_Opt_Out": false,
-//    "Modified_Time": "2018-06-11T14:45:08+05:30",
-//    "Date_of_Birth": null,
-//    "Mailing_City": null,
-//    "Title": null,
-//    "Other_Street": null,
-//    "Mobile": null,
-//    "First_Visited_Time": null,
-//    "Last_Name": "Rajesh",
-//    "Referrer": null,
-//    "Lead_Source": null,
-//    "Tag": [],
-//    "Fax": null
-//    } ]
-//
-//}
-//
-//
